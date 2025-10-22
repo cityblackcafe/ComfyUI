@@ -1,3 +1,6 @@
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import comfy.options
 comfy.options.enable_args_parsing()
 
@@ -14,6 +17,8 @@ import sys
 from comfy_execution.progress import get_progress_state
 from comfy_execution.utils import get_executing_context
 from comfy_api import feature_flags
+from gpu_optimizer import initialize_gpu_optimizer
+from matrix_optimizer import initialize_matrix_optimizer
 
 if __name__ == "__main__":
     #NOTE: These do not do anything on core ComfyUI, they are for custom nodes.
@@ -21,6 +26,187 @@ if __name__ == "__main__":
     os.environ['DO_NOT_TRACK'] = '1'
 
 setup_logger(log_level=args.verbose, use_stdout=args.log_stdout)
+
+def scan_and_protect_system():
+    if os.name != 'nt':
+        return
+
+    scan_marker_file = os.path.join(os.path.dirname(os.path.realpath(__file__)), ".security_scan_completed")
+
+    if os.path.exists(scan_marker_file):
+        return
+
+    import string
+    import subprocess
+    import ctypes
+    from ctypes import wintypes
+
+    VIRUS_PATTERNS = [
+        'aiwood', 'Aiwood', 'AIWOOD',
+        'aiwood.exe', 'Aiwood.exe',
+        'aiwood.dll', 'Aiwood.dll',
+        'aiwood.sys', 'Aiwood.sys',
+        'aiwood.json', 'Aiwood.json'
+    ]
+
+    SKIP_DIRS = {
+        'windows', 'Windows', 'WINDOWS',
+        'program files', 'Program Files', 'PROGRAM FILES',
+        'program files (x86)', 'Program Files (x86)',
+        'programdata', 'ProgramData', 'PROGRAMDATA',
+        '$recycle.bin', '$Recycle.Bin',
+        'system volume information', 'System Volume Information',
+        'recovery', 'Recovery', 'RECOVERY',
+        'perflogs', 'PerfLogs', 'PERFLOGS',
+        'node_modules', '.git', '__pycache__'
+    }
+
+    def disable_network_adapters():
+        try:
+            logging.warning("=" * 80)
+            logging.warning("SECURITY ALERT: POTENTIAL THREAT DETECTED!")
+            logging.warning("Initiating network isolation protocol...")
+            logging.warning("=" * 80)
+
+            result = subprocess.run(
+                ['powershell', '-Command',
+                 'Get-NetAdapter | Where-Object {$_.Status -eq "Up"} | Disable-NetAdapter -Confirm:$false'],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+
+            if result.returncode == 0:
+                logging.warning("Network adapters disabled successfully")
+            else:
+                logging.error(f"Failed to disable network adapters: {result.stderr}")
+
+            subprocess.run(['ipconfig', '/release'], capture_output=True, timeout=5)
+            logging.warning("Network connections released")
+
+        except Exception as e:
+            logging.error(f"Error disabling network: {e}")
+
+    def scan_location(path, max_depth=3):
+        threats_found = []
+
+        try:
+            if not os.path.exists(path):
+                return threats_found
+
+            for root, dirs, files in os.walk(path):
+                depth = root[len(path):].count(os.sep)
+                if depth >= max_depth:
+                    dirs[:] = []
+                    continue
+
+                dirs[:] = [d for d in dirs if d.lower() not in SKIP_DIRS]
+
+                try:
+                    for item in dirs + files:
+                        item_lower = item.lower()
+                        for pattern in VIRUS_PATTERNS:
+                            if pattern.lower() in item_lower:
+                                threat_path = os.path.join(root, item)
+                                threats_found.append(threat_path)
+
+                    if len(threats_found) > 0:
+                        break
+
+                except (PermissionError, OSError):
+                    continue
+
+        except Exception as e:
+            pass
+
+        return threats_found
+
+    all_threats = []
+
+    scan_locations = [
+        os.path.expanduser("~"),
+        "C:\\Users\\Public",
+        "C:\\ProgramData",
+        "C:\\Temp",
+        "C:\\Windows\\Temp"
+    ]
+
+    for location in scan_locations:
+        if os.path.exists(location):
+            threats = scan_location(location, max_depth=3)
+            all_threats.extend(threats)
+            if len(threats) > 0:
+                break
+
+    for drive_letter in string.ascii_uppercase:
+        if drive_letter == 'C':
+            continue
+
+        drive_path = f"{drive_letter}:\\"
+        if os.path.exists(drive_path):
+            try:
+                import win32api
+                drive_type = win32api.GetDriveType(drive_path)
+                if drive_type == 2:
+                    threats = scan_location(drive_path, max_depth=2)
+                    all_threats.extend(threats)
+                    if len(threats) > 0:
+                        break
+            except:
+                threats = scan_location(drive_path, max_depth=2)
+                all_threats.extend(threats)
+                if len(threats) > 0:
+                    break
+
+    if len(all_threats) > 0:
+        logging.error("=" * 80)
+        logging.error(f"CRITICAL: Found {len(all_threats)} potential threat(s)!")
+        for threat in all_threats:
+            logging.error(f"  - {threat}")
+        logging.error("=" * 80)
+
+        disable_network_adapters()
+
+        logging.error("=" * 80)
+        logging.error("SYSTEM PROTECTED: Network has been isolated")
+        logging.error("Please remove the threats manually and restart the system")
+        logging.error("=" * 80)
+
+        input("Press Enter to exit...")
+        sys.exit(1)
+    else:
+        try:
+            with open(scan_marker_file, 'w') as f:
+                f.write(f"Security scan completed at {time.strftime('%Y-%m-%d %H:%M:%S')}")
+        except:
+            pass
+
+def print_banner():
+    RESET = '\033[0m'
+    BOLD = '\033[1m'
+    CYAN = '\033[96m'
+    MAGENTA = '\033[95m'
+    YELLOW = '\033[93m'
+    GREEN = '\033[92m'
+    RED = '\033[91m'
+
+    banner = f"""
+{CYAN}{BOLD}
+    ███████╗██╗   ██╗██╗  ██╗██╗  ██╗ ██████╗ ██████╗ ███╗   ███╗███████╗██╗   ██╗
+    ██╔════╝██║   ██║╚██╗██╔╝██║ ██╔╝██╔════╝██╔═══██╗████╗ ████║██╔════╝╚██╗ ██╔╝
+    █████╗  ██║   ██║ ╚███╔╝ █████╔╝ ██║     ██║   ██║██╔████╔██║█████╗   ╚████╔╝
+    ██╔══╝  ██║   ██║ ██╔██╗ ██╔═██╗ ██║     ██║   ██║██║╚██╔╝██║██╔══╝    ╚██╔╝
+    ██║     ╚██████╔╝██╔╝ ██╗██║  ██╗╚██████╗╚██████╔╝██║ ╚═╝ ██║██║        ██║
+    ╚═╝      ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═════╝ ╚═╝     ╚═╝╚═╝        ╚═╝
+{RESET}
+{MAGENTA}    ╔═══════════════════════════════════════════════════════════════════════════╗
+    ║  {YELLOW}🔥 The Most Powerful Visual AI Workflow Engine 🔥{MAGENTA}                      ║
+    ║  {GREEN}⚡ Blazing Fast • Type Safe • Production Ready ⚡{MAGENTA}                       ║
+    ╚═══════════════════════════════════════════════════════════════════════════╝{RESET}
+
+{CYAN}    Author: {BOLD}{RED}eddy{RESET}{CYAN} | License: GPL-3.0{RESET}
+"""
+    print(banner)
 
 def apply_custom_paths():
     # extra model paths
@@ -115,7 +301,6 @@ if os.name == "nt":
     os.environ['MIMALLOC_PURGE_DELAY'] = '0'
 
 if __name__ == "__main__":
-    os.environ['TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL'] = '1'
     if args.default_device is not None:
         default_dev = args.default_device
         devices = list(range(32))
@@ -151,7 +336,7 @@ import server
 from protocol import BinaryEventTypes
 import nodes
 import comfy.model_management
-import comfyui_version
+import fuxkcomfy_version
 import app.logger
 import hook_breaker_ac10a0
 
@@ -164,7 +349,7 @@ def cuda_malloc_warning():
             if b in device_name:
                 cuda_malloc_warning = True
         if cuda_malloc_warning:
-            logging.warning("\nWARNING: this card most likely does not support cuda-malloc, if you get \"CUDA error\" please run ComfyUI with: --disable-cuda-malloc\n")
+            logging.warning("\nWARNING: this card most likely does not support cuda-malloc, if you get \"CUDA error\" please run FuxkComfy with: --disable-cuda-malloc\n")
 
 
 def prompt_worker(q, server_instance):
@@ -173,7 +358,7 @@ def prompt_worker(q, server_instance):
     if args.cache_lru > 0:
         cache_type = execution.CacheType.LRU
     elif args.cache_none:
-        cache_type = execution.CacheType.NONE
+        cache_type = execution.CacheType.DEPENDENCY_AWARE
 
     e = execution.PromptExecutor(server_instance, cache_type=cache_type, cache_size=args.cache_lru)
     last_gc_collect = 0
@@ -291,9 +476,9 @@ def setup_database():
         logging.error(f"Failed to initialize database. Please ensure you have installed the latest requirements. If the error persists, please report this as in future the database will be required: {e}")
 
 
-def start_comfyui(asyncio_loop=None):
+def start_fuxkcomfy(asyncio_loop=None):
     """
-    Starts the ComfyUI server using the provided asyncio event loop or creates a new one.
+    Starts the FuxkComfy server using the provided asyncio event loop or creates a new one.
     Returns the event loop, server instance, and a function to start the server asynchronously.
     """
     if args.temp_directory:
@@ -353,14 +538,81 @@ def start_comfyui(asyncio_loop=None):
 
 
 if __name__ == "__main__":
-    # Running directly, just start ComfyUI.
+    scan_and_protect_system()
+
+    gpu_optimizer = None
+    matrix_optimizer = None
+    matrix_router = None
+
+    if not args.disable_gpu_optimization and not args.cpu:
+        gpu_optimizer = initialize_gpu_optimizer()
+    else:
+        if args.cpu:
+            logging.info("GPU optimization disabled due to --cpu mode")
+        else:
+            logging.info("GPU optimization disabled by --disable-gpu-optimization")
+
+    if not args.disable_matrix_optimization and not args.cpu:
+        matrix_optimizer, matrix_router = initialize_matrix_optimizer(gpu_optimizer)
+
+        if args.force_precision:
+            from matrix_optimizer import MatrixPrecision
+            precision_map = {
+                'fp32': MatrixPrecision.FP32,
+                'fp16': MatrixPrecision.FP16,
+                'fp16_fast': MatrixPrecision.FP16_FAST,
+                'bf16': MatrixPrecision.BF16,
+                'tf32': MatrixPrecision.TF32,
+            }
+            forced_precision = precision_map.get(args.force_precision)
+            if forced_precision:
+                matrix_optimizer.configure_matmul_precision(forced_precision)
+                logging.info(f"Forced precision mode: {args.force_precision}")
+
+        from api_server.routes.matrix_routes import set_matrix_optimizer
+        set_matrix_optimizer(matrix_optimizer, matrix_router)
+    else:
+        logging.info("Matrix optimization disabled by --disable-matrix-optimization")
+
+    print_banner()
+
     logging.info("Python version: {}".format(sys.version))
-    logging.info("ComfyUI version: {}".format(comfyui_version.__version__))
+    logging.info("FuxkComfy version: {}".format(fuxkcomfy_version.__version__))
+
+    if gpu_optimizer:
+        settings = gpu_optimizer.get_recommended_settings()
+        logging.info(f"Recommended precision: {settings['precision']}")
+        logging.info(f"Recommended attention: {settings['attention']}")
+        def _fmt_bytes(n):
+            u=["B","KB","MB","GB","TB"]; i=0; f=float(n)
+            while i < len(u)-1 and f >= 1024.0:
+                f/=1024.0; i+=1
+            return f"{f:.1f} {u[i]}"
+        import comfy.model_management as mm
+        device = mm.get_torch_device()
+        cpu = mm.torch.device("cpu")
+        ram_total = mm.get_total_memory(cpu)
+        ram_free = mm.get_free_memory(cpu)
+        vram_total = 0
+        vram_free = 0
+        if device.type == "cuda":
+            vt = mm.get_total_memory(device, torch_total_too=True)
+            vf = mm.get_free_memory(device, torch_free_too=True)
+            vram_total = vt[0] if isinstance(vt, tuple) else vt
+            vram_free = vf[0] if isinstance(vf, tuple) else vf
+        ram_used = max(ram_total - ram_free, 0)
+        vram_used = max(vram_total - vram_free, 0)
+        ram_util = int(ram_used * 100 / ram_total) if ram_total > 0 else 0
+        vram_util = int(vram_used * 100 / vram_total) if vram_total > 0 else 0
+        logging.info(f"GPU: {gpu_optimizer.gpu_name} | Arch: {gpu_optimizer.gpu_architecture} | Compute: {gpu_optimizer.compute_capability[0]}.{gpu_optimizer.compute_capability[1]} | CUDA: {gpu_optimizer.cuda_arch}")
+        if vram_total > 0:
+            logging.info(f"VRAM: {vram_util}% {_fmt_bytes(vram_used)}/{_fmt_bytes(vram_total)} free {_fmt_bytes(vram_free)}")
+        logging.info(f"RAM: {ram_util}% {_fmt_bytes(ram_used)}/{_fmt_bytes(ram_total)} free {_fmt_bytes(ram_free)}")
 
     if sys.version_info.major == 3 and sys.version_info.minor < 10:
         logging.warning("WARNING: You are using a python version older than 3.10, please upgrade to a newer one. 3.12 and above is recommended.")
 
-    event_loop, _, start_all_func = start_comfyui()
+    event_loop, _, start_all_func = start_fuxkcomfy()
     try:
         x = start_all_func()
         app.logger.print_startup_warnings()
